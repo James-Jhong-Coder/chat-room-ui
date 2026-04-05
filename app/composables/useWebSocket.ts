@@ -1,6 +1,6 @@
 import type { ChatMessage, AckPayload, OutgoingMessage, WebSocketStatus } from '~/types'
 
-const RECONNECT_DELAYS = [1000, 2000, 5000, 10000] // ms，每次重連等待時間
+const RECONNECT_DELAYS = [1000, 2000, 5000, 10000]
 
 interface UseWebSocketOptions {
   roomId: string
@@ -10,12 +10,12 @@ interface UseWebSocketOptions {
 export function useWebSocket(url: string, options: UseWebSocketOptions) {
   const status = ref<WebSocketStatus>('disconnected')
   const messages = ref<ChatMessage[]>([])
+  const members = ref<string[]>([])
 
   let ws: WebSocket | null = null
   let reconnectAttempt = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-  // 等待 ACK 的 pending 訊息：ackId -> { message, timer, resolve, reject }
   const pendingAcks = new Map<string, {
     message: OutgoingMessage
     timer: ReturnType<typeof setTimeout>
@@ -30,8 +30,10 @@ export function useWebSocket(url: string, options: UseWebSocketOptions) {
     ws.onopen = () => {
       status.value = 'connected'
       reconnectAttempt = 0
-      // 連線後自動加入 room
-      ws!.send(JSON.stringify({ event: 'join', data: { roomId: options.roomId } }))
+      ws!.send(JSON.stringify({
+        event: 'join',
+        data: { roomId: options.roomId, senderId: options.senderId },
+      }))
     }
 
     ws.onmessage = (event) => {
@@ -41,6 +43,8 @@ export function useWebSocket(url: string, options: UseWebSocketOptions) {
         handleAck(data.data as AckPayload)
       } else if (data.type === 'message') {
         messages.value.push(data.data as ChatMessage)
+      } else if (data.type === 'members') {
+        members.value = data.data.members as string[]
       }
     }
 
@@ -82,14 +86,12 @@ export function useWebSocket(url: string, options: UseWebSocketOptions) {
         content,
       }
 
-      // ACK timeout：5 秒內沒收到 ACK 就視為失敗
       const timer = setTimeout(() => {
         pendingAcks.delete(payload.ackId)
         reject('ack timeout')
       }, 5000)
 
       pendingAcks.set(payload.ackId, { message: payload, timer, resolve, reject })
-      // NestJS WsAdapter 格式：{ event, data }
       ws.send(JSON.stringify({ event: 'message', data: payload }))
     })
   }
@@ -103,5 +105,5 @@ export function useWebSocket(url: string, options: UseWebSocketOptions) {
   onMounted(() => connect())
   onUnmounted(() => disconnect())
 
-  return { status, messages, sendMessage, disconnect }
+  return { status, messages, members, sendMessage, disconnect }
 }
